@@ -1,0 +1,189 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Master Data ---
+
+// Tabel Pengguna Aplikasi
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique
+  email        String   @unique
+  passwordHash String // Hash dari password
+  role         UserRole @default(STAFF) // ADMIN, MANAGER, STAFF
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relasi
+  journalEntriesCreated         JournalEntry[] @relation("CreatedBy")
+  journalEntriesStaffApproved   JournalEntry[] @relation("StaffApprovedBy")
+  journalEntriesManagerApproved JournalEntry[] @relation("ManagerApprovedBy")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  STAFF
+}
+
+// Tabel Kode Akun (Chart of Accounts)
+model Account {
+  id             Int            @id @default(autoincrement())
+  accountCode    String         @unique @map("kode_akun") // KODE AKUN
+  accountName    String         @map("nama_akun") // NAMA AKUN
+  normalBalance  NormalBalance  @map("pos_saldo") // POS SALDO [DEBET/KREDIT]
+  reportPosition ReportPosition @map("pos_laporan") // POS LAPORAN [NERACA/LABA RUGI]
+  openingBalance Decimal        @default(0) @map("saldo_awal") @db.Decimal(18, 2) // SALDO AWAL
+
+  // Kolom untuk 'TABEL BANTUAN' di Excel
+  // Menunjukkan apakah akun ini memerlukan detail buku pembantu (e.g., Piutang Usaha, Utang Usaha, Kas Bank)
+  needsHelper Boolean     @default(false) @map("butuh_bantuan")
+  helperType  HelperType? // Tipe entitas bantu (CUSTOMER, VENDOR, BANK) jika needsHelper true
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relasi
+  journalItems JournalItem[]
+}
+
+enum NormalBalance {
+  DEBIT
+  KREDIT
+}
+
+enum ReportPosition {
+  NERACA
+  LABA_RUGI
+}
+
+enum HelperType {
+  CUSTOMER
+  VENDOR
+  BANK
+  // Tambahkan jika ada tipe helper lain di masa depan
+}
+
+// Tabel Master untuk Entitas Bantu (Pelanggan)
+model Customer {
+  id             Int           @id @default(autoincrement())
+  customerCode   String        @unique @map("kode_customer") // Dari KODE AKUN di Kode Bantu
+  customerName   String        @map("nama_customer") // Dari NAMA AKUN di Kode Bantu
+  openingBalance Decimal       @default(0) @db.Decimal(18, 2) // SALDO AWAL di Kode Bantu
+  normalBalance  NormalBalance @map("saldo_normal") // SALDO NORMAL di Kode Bantu
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Relasi
+  journalItems JournalItem[]
+}
+
+// Tabel Master untuk Entitas Bantu (Vendor/Supplier)
+model Vendor {
+  id             Int           @id @default(autoincrement())
+  vendorCode     String        @unique @map("kode_vendor")
+  vendorName     String        @map("nama_vendor")
+  openingBalance Decimal       @default(0) @db.Decimal(18, 2)
+  normalBalance  NormalBalance @map("saldo_normal")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Relasi
+  journalItems JournalItem[]
+}
+
+// Tabel Master untuk Entitas Bantu (Bank)
+model Bank {
+  id             Int           @id @default(autoincrement())
+  bankCode       String        @unique @map("kode_bank")
+  bankName       String        @map("nama_bank")
+  accountNumber  String?       @map("nomor_rekening") // Contoh kolom tambahan spesifik bank
+  openingBalance Decimal       @default(0) @db.Decimal(18, 2)
+  normalBalance  NormalBalance @map("saldo_normal")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Relasi
+  journalItems JournalItem[]
+}
+
+// --- Transaksi Jurnal ---
+
+// Tabel Header Jurnal (JournalEntry - Sesuai No Bukti)
+model JournalEntry {
+  id              Int           @id @default(autoincrement())
+  transactionDate DateTime      @map("tanggal_transaksi") @db.Date // Tanggal Transaksi
+  voucherNumber   String        @unique @map("no_bukti") // No Bukti
+  description     String        @map("keterangan") @db.Text // Keterangan
+  status          JournalStatus @default(DRAFT) // DRAFT, SUBMITTED, APPROVED, REJECTED
+
+  // Audit Trail & Approval Flow
+  createdByUserId Int?
+  createdBy       User?    @relation("CreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime @default(now())
+
+  submittedAt DateTime?
+
+  staffApprovedByUserId Int?
+  staffApprovedBy       User?     @relation("StaffApprovedBy", fields: [staffApprovedByUserId], references: [id])
+  staffApprovedAt       DateTime?
+
+  managerApprovedByUserId Int?
+  managerApprovedBy       User?     @relation("ManagerApprovedBy", fields: [managerApprovedByUserId], references: [id])
+  managerApprovedAt       DateTime?
+
+  // Relasi ke detail jurnal
+  journalItems JournalItem[]
+}
+
+enum JournalStatus {
+  DRAFT // Dibuat tapi belum final
+  SUBMITTED // Dikirim untuk persetujuan staf akuntansi (jika ada) / manajer
+  APPROVED // Disetujui (siap diposting ke Buku Besar)
+  REJECTED // Ditolak, perlu revisi
+}
+
+// Tabel Detail Jurnal (JournalItem - Setiap Baris Debit/Kredit)
+model JournalItem {
+  id             Int     @id @default(autoincrement())
+  journalEntryId Int     @map("jurnal_id")
+  accountId      Int     @map("akun_id")
+  debit          Decimal @default(0) @db.Decimal(18, 2)
+  credit         Decimal @default(0) @db.Decimal(18, 2)
+
+  // Relasi opsional ke entitas bantu (Customer, Vendor, Bank)
+  // Hanya salah satu yang akan terisi jika 'accountId' membutuhkan 'helperType'
+  customerId Int?
+  vendorId   Int?
+  bankId     Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Definisi Relasi
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account      Account      @relation(fields: [accountId], references: [id])
+  customer     Customer?    @relation(fields: [customerId], references: [id])
+  vendor       Vendor?      @relation(fields: [vendorId], references: [id])
+  bank         Bank?        @relation(fields: [bankId], references: [id])
+
+  // Menambahkan indeks untuk kolom foreign key yang sering di-query
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@index([customerId])
+  @@index([vendorId])
+  @@index([bankId])
+}
