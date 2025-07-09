@@ -10,8 +10,7 @@ async function bootstrap() {
     origin: [
       "http://localhost:3000",
       "https://accountingapp.stepanusriodefa.my.id",
-      'https://front-end-accounting.vercel.app'
-
+      "https://front-end-accounting.vercel.app"
     ], // Izinkan request dari origin Next.js Anda
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS', // Metode HTTP yang diizinkan
     credentials: true, // Izinkan pengiriman cookies atau authorization headers
